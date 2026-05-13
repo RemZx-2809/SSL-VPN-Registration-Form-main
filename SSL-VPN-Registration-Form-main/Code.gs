@@ -34,6 +34,9 @@ function doPost(e) {
     const payload = JSON.parse(e.postData.contents);
     const action = payload.action;
 
+    console.log('[doPost] Action: ' + action);
+    console.log('[doPost] Payload keys: ' + Object.keys(payload).join(', '));
+
     switch (action) {
       case 'sendOTP':
         return handleSendOTP(payload);
@@ -49,6 +52,8 @@ function doPost(e) {
     }
 
   } catch (error) {
+    console.error('[doPost] Error: ' + error.message);
+    console.error('[doPost] Stack: ' + error.stack);
     return jsonResponse({ success: false, message: 'Server error: ' + error.message });
   }
 }
@@ -200,6 +205,8 @@ function handleVerifyOTP(payload) {
  * @returns {TextOutput} JSON response
  */
 function handleSubmitForm(payload) {
+  console.log('[submitForm] Starting submission...');
+
   const firstName = sanitize(payload.firstName || '');
   const lastName = sanitize(payload.lastName || '');
   const company = sanitize(payload.company || '');
@@ -209,32 +216,58 @@ function handleSubmitForm(payload) {
   const privacyAccepted = payload.privacyAccepted || 'No';
   const aupAccepted = payload.aupAccepted || 'No';
 
+  console.log('[submitForm] Fields — firstName: ' + firstName + ', lastName: ' + lastName + ', company: ' + company + ', nationalId: ' + (nationalId ? 'provided' : 'MISSING') + ', phone: ' + (phone ? 'provided' : 'MISSING') + ', email: ' + (email ? 'provided' : 'MISSING'));
+
   if (!firstName || !lastName || !company || !nationalId || !phone || !email) {
+    console.error('[submitForm] Validation failed — missing required fields');
     return jsonResponse({ success: false, message: 'All fields are required.' });
   }
 
   // Apply data masking for privacy protection
   const maskedNationalId = maskNationalId(nationalId);
   const maskedPhone = maskPhone(phone);
-  const maskedEmail = maskEmail(email);
+  const maskedEmail = maskEmailAddress(email);
 
-  const sheet = getSheet(REG_SHEET_NAME);
-  sheet.appendRow([
-    new Date().toISOString(),   // Timestamp
-    firstName,                  // First Name
-    lastName,                   // Last Name
-    company,                    // Company
-    maskedNationalId,           // National ID (masked)
-    maskedPhone,                // Phone (masked)
-    maskedEmail,                // Email (masked)
-    privacyAccepted,            // Privacy Accepted
-    aupAccepted                 // AUP Accepted
-  ]);
+  try {
+    const sheet = getSheet(REG_SHEET_NAME);
+    const rowsBefore = sheet.getLastRow();
+    console.log('[submitForm] Rows before insert: ' + rowsBefore);
 
-  return jsonResponse({
-    success: true,
-    message: 'Registration submitted successfully.'
-  });
+    sheet.appendRow([
+      new Date().toISOString(),   // Timestamp
+      firstName,                  // First Name
+      lastName,                   // Last Name
+      company,                    // Company
+      maskedNationalId,           // National ID (masked)
+      maskedPhone,                // Phone (masked)
+      maskedEmail,                // Email (masked)
+      privacyAccepted,            // Privacy Accepted
+      aupAccepted                 // AUP Accepted
+    ]);
+
+    // Flush changes to ensure data is written
+    SpreadsheetApp.flush();
+
+    const rowsAfter = sheet.getLastRow();
+    console.log('[submitForm] Rows after insert: ' + rowsAfter);
+
+    if (rowsAfter <= rowsBefore) {
+      console.error('[submitForm] Row count did not increase — data may not have been written');
+      return jsonResponse({ success: false, message: 'Data write verification failed. Please try again.' });
+    }
+
+    console.log('[submitForm] ✓ Registration saved successfully (row ' + rowsAfter + ')');
+    return jsonResponse({
+      success: true,
+      message: 'Registration submitted successfully.',
+      row: rowsAfter
+    });
+
+  } catch (sheetError) {
+    console.error('[submitForm] Sheet error: ' + sheetError.message);
+    console.error('[submitForm] Stack: ' + sheetError.stack);
+    return jsonResponse({ success: false, message: 'Failed to save data: ' + sheetError.message });
+  }
 }
 
 
@@ -248,7 +281,8 @@ function generateOTP() {
 }
 
 /**
- * Mask email for display (e.g., "j***@gmail.com").
+ * Mask email for OTP display (e.g., "j***@gmail.com").
+ * Used by handleSendOTP for the maskedEmail response.
  */
 function maskEmail(email) {
   const [local, domain] = email.split('@');
@@ -291,10 +325,11 @@ function maskPhone(phone) {
 }
 
 /**
- * Mask Email — show first character + *** + domain.
+ * Mask Email for registration storage — show first character + *** + domain.
  * e.g. "john@gmail.com" → "j***@gmail.com"
+ * Named differently from maskEmail to avoid duplicate function error.
  */
-function maskEmail(email) {
+function maskEmailAddress(email) {
   const parts = email.split('@');
   if (parts.length !== 2) return email;
   const local = parts[0];

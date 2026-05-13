@@ -135,14 +135,22 @@
       aupAccepted: data.aupAccepted
     });
 
-    console.log('[Page3] Submitting to GAS:', payload);
+    console.log('[Page3] Submitting to GAS...');
+    console.log('[Page3] Payload:', payload);
+    console.log('[Page3] GAS URL:', GAS_URL);
 
     try {
       const response = await fetch(GAS_URL, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8'
+        },
         body: payload,
         redirect: 'follow'
       });
+
+      console.log('[Page3] Response status:', response.status);
+      console.log('[Page3] Response redirected:', response.redirected);
 
       // Read the response text first, then parse as JSON
       const text = await response.text();
@@ -152,50 +160,41 @@
       try {
         result = JSON.parse(text);
       } catch (parseErr) {
-        // Non-JSON response — if HTTP status is OK, treat as success
+        console.error('[Page3] JSON parse error:', parseErr.message);
+        console.error('[Page3] Raw text was:', text.substring(0, 500));
+
+        // If HTTP status is OK but response isn't JSON, it might be a GAS HTML error page
         if (response.ok || response.redirected) {
-          console.log('[Page3] Non-JSON but HTTP OK — treating as success');
+          // Check if it looks like an error page
+          if (text.includes('Error') || text.includes('error') || text.includes('<!DOCTYPE')) {
+            throw new Error('เซิร์ฟเวอร์ตอบกลับ HTML แทน JSON — กรุณาตรวจสอบ Web App deployment');
+          }
+          console.warn('[Page3] Non-JSON but HTTP OK — treating as success');
           return { success: true, message: 'Registration submitted.' };
         }
         throw new Error('เซิร์ฟเวอร์ตอบกลับผิดปกติ (Status: ' + response.status + ')');
       }
 
+      console.log('[Page3] Parsed result:', JSON.stringify(result));
+
       // GAS returned a valid JSON response — check success flag
       if (!result.success) {
+        console.error('[Page3] GAS returned failure:', result.message);
         throw new Error(result.message || 'การส่งข้อมูลล้มเหลว');
       }
 
+      console.log('[Page3] ✓ Submission successful! Row:', result.row || 'N/A');
       return result;
 
     } catch (err) {
-      // If the error is from GAS (validation error), do NOT retry with no-cors
-      // Only use no-cors fallback for actual network/CORS failures
-      if (err.message && (
-        err.message.includes('fields are required') ||
-        err.message.includes('ข้อมูลไม่ครบ') ||
-        err.message.includes('Submission failed') ||
-        err.message.includes('ล้มเหลว') ||
-        err.message.includes('ผิดปกติ')
-      )) {
-        // This is a server-side validation error — don't retry
-        console.error('[Page3] GAS validation error:', err.message);
-        throw err;
-      }
+      console.error('[Page3] Submission error:', err.message);
 
-      // Network error — try no-cors fallback
-      console.warn('[Page3] Network error, trying no-cors fallback:', err.message);
-      try {
-        await fetch(GAS_URL, {
-          method: 'POST',
-          mode: 'no-cors',
-          body: payload
-        });
-        console.log('[Page3] no-cors fallback sent successfully');
-        return { success: true, message: 'Registration submitted.' };
-      } catch (fallbackErr) {
-        console.error('[Page3] All fetch attempts failed:', fallbackErr);
+      // Re-throw with clear error message — do NOT silently succeed
+      if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
         throw new Error('ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่');
       }
+
+      throw err;
     }
   }
 
